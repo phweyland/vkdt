@@ -137,7 +137,7 @@ qvk_create_swapchain()
     for(int i = 0; i < qvk.num_swap_chain_images; i++)
       vkDestroyImageView(qvk.device, qvk.swap_chain_image_views[i], 0);
 
-  /* create swapchain (query details and ignore them afterwards :-) )*/
+  /* create swapchain */
   VkSurfaceCapabilitiesKHR surf_capabilities;
   vkGetPhysicalDeviceSurfaceCapabilitiesKHR(qvk.physical_device, qvk.surface, &surf_capabilities);
 
@@ -182,13 +182,20 @@ out:;
   {
     qvk.extent = surf_capabilities.currentExtent;
   }
-  else {
+  else
+  {
     qvk.extent.width  = MIN(surf_capabilities.maxImageExtent.width,  qvk.win_width);
     qvk.extent.height = MIN(surf_capabilities.maxImageExtent.height, qvk.win_height);
 
     qvk.extent.width  = MAX(surf_capabilities.minImageExtent.width,  qvk.extent.width);
     qvk.extent.height = MAX(surf_capabilities.minImageExtent.height, qvk.extent.height);
   }
+
+  // this is stupid, but it seems if the window manager does not allow going fullscreen
+  // it crashes otherwise. sometimes you need to first make the window floating in dwm
+  // before going F11 -> fullscreen works. sigh.
+  qvk.win_width  = qvk.extent.width;
+  qvk.win_height = qvk.extent.height;
 
   uint32_t num_images = surf_capabilities.minImageCount;
   if(surf_capabilities.maxImageCount > 0)
@@ -245,7 +252,7 @@ out:;
   return VK_SUCCESS;
 }
 
-// this function works without gui and consequently does not init SDL
+// this function works without gui and consequently does not init glfw
 VkResult
 qvk_init()
 {
@@ -254,10 +261,10 @@ qvk_init()
   get_vk_layer_list(&qvk.num_layers, &qvk.layers);
 
   /* instance extensions */
-  int num_inst_ext_combined = qvk.num_sdl2_extensions + LENGTH(vk_requested_instance_extensions);
+  int num_inst_ext_combined = qvk.num_glfw_extensions + LENGTH(vk_requested_instance_extensions);
   char **ext = alloca(sizeof(char *) * num_inst_ext_combined);
-  memcpy(ext, qvk.sdl2_extensions, qvk.num_sdl2_extensions * sizeof(*qvk.sdl2_extensions));
-  memcpy(ext + qvk.num_sdl2_extensions, vk_requested_instance_extensions, sizeof(vk_requested_instance_extensions));
+  memcpy(ext, qvk.glfw_extensions, qvk.num_glfw_extensions * sizeof(*qvk.glfw_extensions));
+  memcpy(ext + qvk.num_glfw_extensions, vk_requested_instance_extensions, sizeof(vk_requested_instance_extensions));
 
   get_vk_extension_list(NULL, &qvk.num_extensions, &qvk.extensions);
 

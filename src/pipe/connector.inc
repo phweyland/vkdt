@@ -22,7 +22,7 @@
     int old_con = cn1->connected_mc;
     if(old_mod >= graph->num_elements) { assert(0 && "sink inconsistent!"); return 4; }
     if(graph->element[old_mod].connector[old_con].type != dt_token("write") &&
-       graph->element[old_mod].connector[old_con].type == dt_token("source"))
+       graph->element[old_mod].connector[old_con].type != dt_token("source"))
     { assert(0 && "sink inconsistent!"); return 5; }
 
     // disconnect cn1
@@ -32,6 +32,7 @@
     // previous source. reset to the generic module->so version:
     cn1->format = graph->element[m1].so->connector[c1].format;
     cn1->frames = graph->element[m1].so->connector[c1].frames;
+    cn1->chan   = graph->element[m1].so->connector[c1].chan;
 #endif
 
     // decrement previous source's reference counter
@@ -46,6 +47,7 @@
         // replace the format of this connector by the (potentially generic) module->so version
         graph->element[old_mod].connector[old_con].format = graph->element[old_mod].so->connector[old_con].format;
         graph->element[old_mod].connector[old_con].frames = graph->element[old_mod].so->connector[old_con].frames;
+        graph->element[old_mod].connector[old_con].chan   = graph->element[old_mod].so->connector[old_con].chan;
       }
 #endif
     }
@@ -60,8 +62,16 @@
   // note that this only happens with (-1, -1, sink, sink), so this case is covered above
   // by resetting the previously connected input (old source).
 
+  // to be in a consistent state need to point out that we are an explicit
+  // connection, not created by copying a module connection to a node:
+  graph->element[m1].connector[c1].associated_i = -1;
+  graph->element[m1].connector[c1].associated_c = -1;
+
   // actually just disconnect requested? we're done now, then:
   if(c0 < 0 || m0 < 0) return 0;
+
+  graph->element[m0].connector[c0].associated_i = -1;
+  graph->element[m0].connector[c0].associated_c = -1;
 
   // we're now in a consistent state to fail, leaving everything
   // disconnected but intact.
@@ -74,11 +84,32 @@
   if(cn0->type != dt_token("write") && cn0->type != dt_token("source")) return 9;
 
   // check buffer config for compatibility
-  if(cn1->chan != cn0->chan) return 10;
   // if output is already connected to another input, use this format as mandatory (can't be "*" any more)
   // if any one is "*" use the other
   // if both are "*" fall back to default "f16"
   // this should mostly happen on the module level
+#ifdef connect_module
+  // set output channel and format to same as an already connected input channel, prefix token by &:
+  if(dt_token_str(cn0->chan)[0] == '&')
+  {
+    dt_token_t tmp = cn0->chan >> 8;
+    for(int c=0;c<graph->element[m0].num_connectors;c++)
+      if(graph->element[m0].connector[c].name == tmp)
+      { cn0->chan = graph->element[m0].connector[c].chan; break; }
+  }
+  if(dt_token_str(cn0->format)[0] == '&')
+  {
+    dt_token_t tmp = cn0->chan >> 8;
+    for(int c=0;c<graph->element[m0].num_connectors;c++)
+      if(graph->element[m0].connector[c].name == tmp)
+      { cn0->format = graph->element[m0].connector[c].format; break; }
+  }
+#endif
+  if(cn1->chan == dt_token("*")) cn1->chan = cn0->chan;
+  if(cn0->chan == dt_token("*")) cn0->chan = cn1->chan;
+  if(cn1->chan == dt_token("*")) cn1->chan = dt_token("rgba");
+  if(cn0->chan == dt_token("*")) cn0->chan = dt_token("rgba");
+  if(cn1->chan != cn0->chan) return 10;
   if(cn1->format == dt_token("*")) cn1->format = cn0->format;
   if(cn0->format == dt_token("*")) cn0->format = cn1->format;
   if(cn1->format == dt_token("*")) cn1->format = dt_token("f16");

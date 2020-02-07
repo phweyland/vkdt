@@ -14,11 +14,12 @@ targets, such as the main view and histograms.
 
 ## features
 
-* very fast GPU only processing
-* general DAG of processing operations, featuring multiple inputs and outputs and
+* very fast [GPU only](src/qvk/readme.md) processing
+* [general DAG of processing operations](src/pipe/readme.md), featuring multiple inputs and outputs and
   feedback connectors for animation/iteration
 * [full window colour management](doc/colourmanagement.md)
-* minimal set of image operation modules
+* [minimal set of image operation modules](src/pipe/modules/readme.md)
+* [noise profiling](doc/noiseprofiling.md)
 
 ## build instructions
 
@@ -66,7 +67,7 @@ and we may link to some others, too.
 ## dependencies
 - clang to compile (for now, will restore gcc compat at some point)
 - vulkan, glslangValidator (libvulkan-dev, glslang-tools, or use the sdk)
-- sdl2 (libsdl2-dev)
+- glfw (libglfw3-dev)
 - submodule imgui
 - submodule rawspeed (pulls in pugixml, stdc++, zlib, jpeg, libomp-dev)
 - libjpeg

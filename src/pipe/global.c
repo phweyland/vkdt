@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <stdio.h>
+#include <locale.h>
 
 dt_pipe_global_t dt_pipe;
 
@@ -51,6 +52,12 @@ read_param_config_ascii(
     float *val = p->val;
     for(int i=0;i<p->cnt;i++)
       *(val++) = dt_read_float(line, &line); // default value
+  }
+  else if(type == dt_token("int"))
+  {
+    int32_t *val = p->vali;
+    for(int i=0;i<p->cnt;i++)
+      *(val++) = dt_read_int(line, &line); // default value
   }
   else if(type == dt_token("string"))
   {
@@ -129,16 +136,14 @@ dt_module_so_load(
   // read ui widget connection:
   snprintf(filename, sizeof(filename), "modules/%s/params.ui", dirname);
   f = fopen(filename, "rb");
-  if(!f)
-  { // init as [0,1] sliders as fallback
-    for(int i=0;i<mod->num_params;i++)
-      mod->param[i]->widget = (dt_widget_descriptor_t) {
-        .type = dt_token("slider"),
-        .min  = 0.0f,
-        .max  = 1.0f
-      };
-  }
-  else
+  // init as [0,1] sliders as fallback
+  for(int i=0;i<mod->num_params;i++)
+    mod->param[i]->widget = (dt_widget_descriptor_t) {
+      .type = dt_token("slider"),
+      .min  = 0.0f,
+      .max  = 1.0f
+    };
+  if(f)
   {
     while(!feof(f))
     {
@@ -159,6 +164,8 @@ dt_module_so_load(
         case dt_token("axquad"):
           break;
         case dt_token("draw"):
+          break;
+        case dt_token("hidden"):
           break;
         default:
           dt_log(s_log_err, "unknown widget type %"PRItkn" in %s!", dt_token_str(type), filename);
@@ -217,6 +224,7 @@ dt_module_so_unload(dt_module_so_t *mod)
 int dt_pipe_global_init()
 {
   memset(&dt_pipe, 0, sizeof(dt_pipe));
+  (void)setlocale(LC_ALL, "C"); // make sure we write and parse floats correctly
   // TODO: setup search directory
   struct dirent *dp;
   DIR *fd = opendir("modules");

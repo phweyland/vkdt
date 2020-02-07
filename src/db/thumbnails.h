@@ -18,6 +18,7 @@
 // /<full path from root>/imgname.raw.cfg
 // ~/.cache/vkdt/imgnamehash.bc1
 
+typedef struct dt_db_t dt_db_t;
 typedef struct dt_thumbnail_t
 {
   VkDescriptorSet        dset;
@@ -28,6 +29,8 @@ typedef struct dt_thumbnail_t
   struct dt_thumbnail_t *prev;    // dlist for lru cache
   struct dt_thumbnail_t *next;
   uint32_t               imgid;   // index into images->image[] or -1u
+  uint32_t               wd;
+  uint32_t               ht;
 }
 dt_thumbnail_t;
 
@@ -67,10 +70,16 @@ VkResult dt_thumbnails_init(
 // free all resources
 void dt_thumbnails_cleanup(dt_thumbnails_t *tn);
 
-// precache bc1 thumbnails for a directory of raw images.
-// runs in a separate thread, returns immediately. if you want to make sure
-// all threads finished processing, run threads_wait() after this.
-VkResult dt_thumbnails_cache_directory(dt_thumbnails_t *tn, const char *dirname);
+// create bc1 thumbnails for the current collection in given db
+VkResult dt_thumbnails_cache_collection(dt_thumbnails_t *tn, dt_db_t *db);
+
+// create bc1 thumbnail only for given image
+// runs in this thread.
+// only accepting .cfg files here (can be non-existent and will be replaced in such case)
+VkResult dt_thumbnails_cache_one(
+    dt_graph_t      *graph,
+    dt_thumbnails_t *tn,
+    const char      *filename);
 
 // load one bc1 thumbnail for a given filename. fills thumb_index and returns
 // VK_SUCCESS if all went well.
@@ -80,7 +89,6 @@ VkResult dt_thumbnails_load_one(dt_thumbnails_t *tn, const char *filename, uint3
 // and return after it's done. it'll update lru lists and try to load bc1 thumbnails
 // from the cache location. it does not trigger a bc1 creation process (such as
 // dt_thumbnails_cache_directory() does).
-typedef struct dt_db_t dt_db_t;
 void
 dt_thumbnails_load_list(
     dt_thumbnails_t *tn,           // thumbnails to write to

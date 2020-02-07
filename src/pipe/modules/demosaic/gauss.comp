@@ -21,58 +21,6 @@ layout( // output f16 buffer rgb
 ) uniform writeonly image2D img_out;
 
 
-// (c) christoph peters:
-void evd2x2(
-    out vec2 eval,
-    out vec2 evec0,
-    out vec2 evec1,
-    mat2 M)
-{
-	// Define some short hands for the matrix entries
-	float a = M[0][0];
-	float b = M[1][0];
-	float c = M[1][1];
-	// Compute coefficients of the characteristic polynomial
-	float pHalf = -0.5 * (a + c);
-	float q = a*c - b*b;
-	// Solve the quadratic
-	float discriminant_root = sqrt(pHalf * pHalf - q);
-	eval.x = -pHalf + discriminant_root;
-	eval.y = -pHalf - discriminant_root;
-	// Subtract a scaled identity matrix to obtain a rank one matrix
-	float a0 = a - eval.x;
-	float b0 = b;
-	float c0 = c - eval.x;
-	// The column space of this matrix is orthogonal to the first eigenvector 
-	// and since the eigenvectors are orthogonal themselves, it agrees with the 
-	// second eigenvector. Pick the longer column to avoid cancellation.
-	float squaredLength0 = a0*a0 + b0*b0;
-	float squaredLength1 = b0*b0 + c0*c0;
-	float squaredLength;
-	if (squaredLength0 > squaredLength1)
-  {
-		evec1.x = a0;
-		evec1.y = b0;
-		squaredLength = squaredLength0;
-	}
-	else {
-		evec1.x = b0;
-		evec1.y = c0;
-		squaredLength = squaredLength1;
-	}
-	// If the eigenvector is exactly zero, both eigenvalues are the same and the 
-	// choice of orthogonal eigenvectors is arbitrary
-	evec1.x = (squaredLength == 0.0) ? 1.0 : evec1.x;
-	squaredLength = (squaredLength == 0.0) ? 1.0 : squaredLength;
-	// Now normalize
-	float invLength = 1.0 / sqrt(squaredLength);
-	evec1.x *= invLength;
-	evec1.y *= invLength;
-	// And rotate to get the other eigenvector
-	evec0.x =  evec1.y;
-	evec0.y = -evec1.x;
-}
-
 
 // demosaic reduced size. run on output dimensions, gather all colours from
 // input buffer (this might be 3x3 for xtrans).
@@ -82,25 +30,23 @@ main()
   ivec2 ipos = ivec2(gl_GlobalInvocationID);
   if(any(greaterThanEqual(ipos, imageSize(img_out)))) return;
 
-  // XXX
-  // float col = texelFetch(img_in, ipos, 0).r;
-  // imageStore(img_out, ipos, vec4(vec3(col), 1.0));
-  // return;// XXX
-
-  float g00 = texelFetch(img_in, ipos+ivec2(-1,-1), 0).r;
   float g01 = texelFetch(img_in, ipos+ivec2(-1, 0), 0).r;
-  float g02 = texelFetch(img_in, ipos+ivec2(-1, 1), 0).r;
   float g10 = texelFetch(img_in, ipos+ivec2( 0,-1), 0).r;
-  float g11 = texelFetch(img_in, ipos+ivec2( 0, 0), 0).r;
   float g12 = texelFetch(img_in, ipos+ivec2( 0, 1), 0).r;
-  float g20 = texelFetch(img_in, ipos+ivec2( 1,-1), 0).r;
   float g21 = texelFetch(img_in, ipos+ivec2( 1, 0), 0).r;
+#if 0
+  float g00 = texelFetch(img_in, ipos+ivec2(-1,-1), 0).r;
+  float g02 = texelFetch(img_in, ipos+ivec2(-1, 1), 0).r;
+  float g11 = texelFetch(img_in, ipos+ivec2( 0, 0), 0).r;
+  float g20 = texelFetch(img_in, ipos+ivec2( 1,-1), 0).r;
   float g22 = texelFetch(img_in, ipos+ivec2( 1, 1), 0).r;
   float m = g11;//(g00 + g01 + g02 + g10 + g11 + g12 + g20 + g21 + g22)/9.0;
+#endif
   // gradient points to largest differences
   // 00 10 20
   // 01 11 21
   // 02 12 22
+#if 0
   // XXX only good for max voting: (abs will always distort direction)
   float vote = 0.0, vote2;
   vec2 var = vec2(-1, 1);
@@ -131,7 +77,9 @@ main()
     var = vec2(0, 1);
     vote = vote2;
   }
-#if 0
+  float vlen = length(var);
+  imageStore(img_out, ipos, vec4(var/vlen, 10.0, 1.0));
+#elif 0
   vec2 var = (g00-m)*vec2( 1, 1)+//vec2(-1,-1)*vec2(-1,-1) +
              (g01-m)*vec2( 1, 0)+//vec2(-1, 0)*vec2(-1, 0) +
              (g02-m)*vec2( 1,-1)+//vec2(-1, 1)*vec2(-1, 1) +
@@ -153,13 +101,21 @@ main()
   mat2 M = mat2(var.x, cov, cov, var.y);
   vec2 eval, evec0, evec1;
   evd2x2(eval, evec0, evec1, M);
-  // DEBUG:
-  eval = vec2(1.0, 0.0);
-  // evec0 = vec2(0.0, 1.0);
+  imageStore(img_out, ipos, vec4(evec0, 100000*eval.x, 1.0));
+#else // try stuff they have in the paper [Wronsky 2019]
+  // they claim they have 4 gradient estimates, not sure if total or for each of x,y.
+  // anyways i don't see it since g21 - g11 + g10 + g11 is just one sample.
+  // if at all we can try 3 for each of x,y.
+  float Ix =   (g12 - g10);
+  float Iy = - (g21 - g01);
+
+  mat2 M = mat2(Ix*Ix, Ix*Iy, Ix*Iy, Iy*Iy);
+  vec2 eval, evec0, evec1;
+  evd2x2(eval, evec0, evec1, M);
+  // XXX limit anisotropy of reconstruction. we probably only want
+  // XXX to do this in case there is a lot of noise (so we don't trust the estimation)
+  // TODO: figure out uncertainty here if there's known variance on g**).
+  eval.y = max(eval.y, eval.x*0.6);
+  imageStore(img_out, ipos, vec4(evec0, eval));
 #endif
-  float vlen = length(var);
-  imageStore(img_out, ipos, vec4(vec2(var.y, -var.x)/vlen,
-        0.1*vlen, 1.0));
-  // imageStore(img_out, ipos, vec4(65535*(evec0+1.0), 10.0*eval.x, 1.0));
-  // imageStore(img_out, ipos, vec4(evec1, eval.y/eval.x, 1.0));
 }

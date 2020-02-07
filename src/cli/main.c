@@ -2,64 +2,12 @@
 #include "pipe/graph.h"
 #include "pipe/graph-io.h"
 #include "pipe/graph-print.h"
+#include "pipe/graph-export.h"
 #include "pipe/global.h"
-#include "db/thumbnails.h"
+#include "pipe/modules/api.h"
 #include "core/log.h"
 
 #include <stdlib.h>
-
-// replace given display node instance by export module.
-// returns 0 on success.
-static int
-replace_display(
-    dt_graph_t *graph,
-    dt_token_t  inst,
-    int         ldr,   // TODO: output format and params of all sorts
-    const char *filename)
-{
-  const int mid = dt_module_get(graph, dt_token("display"), inst);
-  if(mid < 0) return 1; // no display node by that name
-
-  // get module the display is connected to:
-  int cid = dt_module_get_connector(graph->module+mid, dt_token("input"));
-  int m0 = graph->module[mid].connector[cid].connected_mi;
-  int o0 = graph->module[mid].connector[cid].connected_mc;
-
-  if(m0 < 0) return 2; // display input not connected
-
-  // new module export with same inst
-  // maybe new module 8-bit in between here
-  dt_token_t export = ldr ? dt_token("o-jpg") : dt_token("o-pfm");
-  const int m1 = dt_module_add(graph, dt_token("f2srgb"), inst);
-  const int i1 = dt_module_get_connector(graph->module+m1, dt_token("input"));
-  const int o1 = dt_module_get_connector(graph->module+m1, dt_token("output"));
-  const int m2 = dt_module_add(graph, export, inst);
-  const int i2 = dt_module_get_connector(graph->module+m2, dt_token("input"));
-  if(ldr)
-  {
-    graph->module[m1].connector[o1].format = graph->module[m2].connector[i2].format;
-    CONN(dt_module_connect(graph, m0, o0, m1, i1));
-    CONN(dt_module_connect(graph, m1, o1, m2, i2));
-  }
-  else
-  {
-    graph->module[m0].connector[o0].format = graph->module[m2].connector[i2].format;
-    CONN(dt_module_connect(graph, m0, o0, m2, i2));
-  }
-
-  // TODO: set output filename parameter on export module
-  return 0;
-}
-
-// disconnect all remaining display nodes.
-static void
-disconnect_display_modules(
-    dt_graph_t *graph)
-{
-  for(int m=0;m<graph->num_modules;m++)
-    if(graph->module[m].name == dt_token("display"))
-      dt_module_remove(graph, m); // disconnect and reset/ignore
-}
 
 int main(int argc, char *argv[])
 {
@@ -71,40 +19,42 @@ int main(int argc, char *argv[])
 
   const char *graphcfg = 0;
   int dump_graph = 0;
-  const char *thumbnails = 0;
-  dt_token_t output = dt_token("main");
-  const char *filename = "output";
+  int output_cnt = 1;
+  int user_output_cnt = 0;
+  float quality = 95.0f;
+  dt_token_t output[10] = { dt_token("main"), dt_token("hist") };
   int ldr = 1;
+  int config_start = 0; // start of arguments which are interpreted as additional config lines
   for(int i=0;i<argc;i++)
   {
     if(!strcmp(argv[i], "-g") && i < argc-1)
       graphcfg = argv[++i];
+    else if(!strcmp(argv[i], "--quality") && i < argc-1)
+      quality = atof(argv[++i]);
     else if(!strcmp(argv[i], "--dump-modules"))
       dump_graph = 1;
     else if(!strcmp(argv[i], "--dump-nodes"))
       dump_graph = 2;
-    else if(!strcmp(argv[i], "--thumbnails") && i < argc-1)
-      thumbnails = argv[++i];
-    // TODO: parse more output: filename, format related things etc
+    else if(!strcmp(argv[i], "--output") && i < argc-1 && ++i)
+      output[user_output_cnt++] = dt_token(argv[i]);
+    else if(!strcmp(argv[i], "--config"))
+    { config_start = i+1; break; }
+
+    // TODO: parse more options: filename, format related things etc
   }
+  if(user_output_cnt) output_cnt = user_output_cnt;
 
   if(qvk_init()) exit(1);
 
-  if(thumbnails)
-  {
-    dt_thumbnails_t tn;
-    // only width/height will matter here
-    dt_thumbnails_init(&tn, 400, 400, 1000, 1ul<<30);
-    dt_thumbnails_cache_directory(&tn, thumbnails);
-    threads_wait(); // wait for bg threads to finish
-    dt_thumbnails_cleanup(&tn);
-    qvk_cleanup();
-    exit(0);
-  }
-
   if(!graphcfg)
   {
-    dt_log(s_log_cli, "usage: vkdt-cli -g <graph.cfg> [-d verbosity] [--dump-modules|--dump-nodes] [--thumbnails <dir>]");
+    fprintf(stderr, "usage: vkdt-cli -g <graph.cfg>\n"
+    "    [-d verbosity]                set log verbosity (mem,perf,pipe,cli,err,all)\n"
+    "    [--dump-modules|--dump-nodes] write graphvis dot files to stdout\n"
+    "    [--output <inst>]             name the instance of the output to write (can use multiple)\n"
+    "    [--quality <0-100>]           jpg output quality\n"
+    "    [--config]                    everything after this will be interpreted as additional cfg lines\n"
+        );
     qvk_cleanup();
     exit(1);
   }
@@ -118,6 +68,9 @@ int main(int argc, char *argv[])
     qvk_cleanup();
     exit(1);
   }
+  for(int i=config_start;i<argc;i++)
+    if(dt_graph_read_config_line(&graph, argv[i]))
+      dt_log(s_log_pipe|s_log_err, "failed in command line %d: '%s'", i - config_start + 1, argv[i]);
 
   // dump original modules, i.e. with display modules
   if(dump_graph == 1)
@@ -136,15 +89,22 @@ int main(int argc, char *argv[])
   }
 
   // replace requested display node by export node:
-  if(!found_main && replace_display(&graph, output, ldr, filename))
+  if(!found_main)
   {
-    dt_log(s_log_err, "graph does not contain suitable display node %"PRItkn"!", dt_token_str(output));
-    exit(2);
+    int cnt = 0;
+    for(;cnt<output_cnt;cnt++)
+      if(dt_graph_replace_display(&graph, output[cnt], ldr))
+        break;
+    if(cnt == 0)
+    {
+      dt_log(s_log_err, "graph does not contain suitable display node %"PRItkn"!", dt_token_str(output));
+      exit(2);
+    }
   }
   // make sure all remaining display nodes are removed:
-  disconnect_display_modules(&graph);
+  dt_graph_disconnect_display_modules(&graph);
 
-  dt_graph_run(&graph, s_graph_run_all);
+  dt_graph_export(&graph, output_cnt, output, 0, quality);
 
   // nodes we can only print after run() has been called:
   if(dump_graph == 2)

@@ -2,6 +2,7 @@
 #include "modules/api.h"
 #include "pipe/io.h"
 #include "core/log.h"
+#include <libgen.h>
 
 // helper to read parameters from config file
 static inline int
@@ -36,6 +37,13 @@ read_param_ascii(
       float *block = (float *)(graph->module[modid].param + p->offset);
       for(int i=0;i<cnt;i++)
         *(block++) = dt_read_float(line, &line);
+    }
+    break;
+    case dt_token("int"):
+    {
+      int32_t *block = (int32_t *)(graph->module[modid].param + p->offset);
+      for(int i=0;i<cnt;i++)
+        *(block++) = dt_read_int(line, &line);
     }
     break;
     case dt_token("string"):
@@ -84,7 +92,7 @@ read_connection_ascii(
   if(err)
   {
     dt_log(s_log_pipe, "[read connect] "
-        "%"PRItkn" %"PRItkn" %"PRItkn" %"PRItkn" %"PRItkn" %"PRItkn"",
+        "%"PRItkn" %"PRItkn" %"PRItkn" %"PRItkn" %"PRItkn" %"PRItkn,
         dt_token_str(mod0), dt_token_str(inst0), dt_token_str(conn0),
         dt_token_str(mod1), dt_token_str(inst1), dt_token_str(conn1));
     dt_log(s_log_pipe, "[read connect] connection failed: error %d: %s", err, dt_connector_error_str(err));
@@ -92,7 +100,7 @@ read_connection_ascii(
   }
   else
   {
-    graph->module[modid0].connector[conid0].flags |= extra_flags;
+    // graph->module[modid0].connector[conid0].flags |= extra_flags;
     graph->module[modid1].connector[conid1].flags |= extra_flags;
     if(extra_flags & s_conn_feedback)
     { // set this here because during dag traversal it would potentially
@@ -117,6 +125,21 @@ read_module_ascii(
   return dt_module_add(graph, name, inst) < 0;
 }
 
+int dt_graph_read_config_line(
+    dt_graph_t *graph,
+    char *c)
+{
+  if(c[0] == '#') return 0;
+  dt_token_t cmd = dt_read_token(c, &c);
+  if     (cmd == dt_token("module"))   return read_module_ascii(graph, c);
+  else if(cmd == dt_token("param"))    return read_param_ascii(graph, c);
+  else if(cmd == dt_token("connect"))  return read_connection_ascii(graph, c, 0);
+  else if(cmd == dt_token("feedback")) return read_connection_ascii(graph, c, s_conn_feedback);
+  else if(cmd == dt_token("frames"))   graph->frame_cnt = atol(c); // does not fail
+  else return 1;
+  return 0;
+}
+
 // TODO: rewrite this to work on a uint8_t * data pointer (same for write below)
 // TODO: also insert line start pointers (for history stack)
 // this is a public api function on the graph, it reads the full stack
@@ -125,6 +148,8 @@ int dt_graph_read_config_ascii(
     const char *filename)
 {
   FILE *f = fopen(filename, "rb");
+  if(snprintf(graph->searchpath, sizeof(graph->searchpath), "%s", filename) < 0) graph->searchpath[0] = 0;
+  else dirname(graph->searchpath);
   if(!f) return 1;
   // needs to be large enough to hold 1000 vertices of drawn masks:
   char line[30000];
@@ -133,15 +158,8 @@ int dt_graph_read_config_ascii(
   {
     fscanf(f, "%[^\n]", line);
     if(fgetc(f) == EOF) break; // read \n
-    char *c = line;
     lno++;
-    if(line[0] == '#') continue;
-    dt_token_t cmd = dt_read_token(c, &c);
-    if     (cmd == dt_token("module"))   { if(read_module_ascii(graph, c))        goto error;}
-    else if(cmd == dt_token("param"))    { if(read_param_ascii(graph, c))         goto error;}
-    else if(cmd == dt_token("connect"))  { if(read_connection_ascii(graph, c, 0)) goto error;}
-    else if(cmd == dt_token("feedback")) { if(read_connection_ascii(graph, c, s_conn_feedback)) goto error;}
-    else goto error;
+    if(dt_graph_read_config_line(graph, line)) goto error;
   }
   fclose(f);
   return 0;
@@ -184,9 +202,11 @@ dt_graph_write_connection_ascii(
 {
   dt_connector_t *c = graph->module[m].connector+i;
   if(!dt_connector_input(c)) return line; // refuse to serialise outgoing connections
-  WRITE("connect:"
+  if(c->connected_mi == -1)  return line; // not connected
+  WRITE("%s:"
       "%"PRItkn":%"PRItkn":%"PRItkn":"
       "%"PRItkn":%"PRItkn":%"PRItkn"\n",
+      c->flags & s_conn_feedback ? "feedback" : "connect",
       dt_token_str(graph->module[c->connected_mi].name),
       dt_token_str(graph->module[c->connected_mi].inst),
       dt_token_str(graph->module[c->connected_mi].connector[c->connected_mc].name),
@@ -220,6 +240,14 @@ dt_graph_write_param_ascii(
       WRITE("%g\n", v[mod->so->param[p]->cnt-1]);
       break;
     }
+    case dt_token("int"):
+    {
+      const int32_t *v = dt_module_param_int(mod, p);
+      for(int i=0;i<mod->so->param[p]->cnt-1;i++)
+        WRITE("%d:", v[i]);
+      WRITE("%d\n", v[mod->so->param[p]->cnt-1]);
+      break;
+    }
     case dt_token("string"):
     {
       WRITE("%s\n", dt_module_param_string(mod, p));
@@ -227,6 +255,16 @@ dt_graph_write_param_ascii(
     }
     default:;
   }
+  return line;
+}
+
+char *
+dt_graph_write_global_ascii(
+    const dt_graph_t *graph,
+    char             *line,
+    size_t            size)
+{
+  WRITE("frames:%d\n", graph->frame_cnt);
   return line;
 }
 #undef WRITE
@@ -241,6 +279,9 @@ int dt_graph_write_config_ascii(
   char *org = malloc(size);
   char *buf = org;
   char *end = buf + size;
+
+  if(!(buf = dt_graph_write_global_ascii(graph, buf, end-buf)))
+    goto error;
 
   // write all modules
   for(int m=0;m<graph->num_modules;m++)

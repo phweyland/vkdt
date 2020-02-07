@@ -24,13 +24,27 @@
 // in the worst case we wastefully copy it around.
 typedef struct dt_image_params_t
 {
-  float black[4];
-  float white[4];
-  float whitebalance[4];
-  uint32_t filters;
-  uint32_t crop_aabb[4];
-  // TODO: other interesting things?
-  float cam_to_rec2020[9];
+  // from rawspeed:
+  float    black[4];          // black point
+  float    white[4];          // clipping threshold
+  float    whitebalance[4];   // camera white balance coefficients
+  uint32_t filters;           // 0-full 9-xtrans else: bayer bits
+  uint32_t crop_aabb[4];      // crops away black borders of raw
+
+  // from exiv2:
+  float    cam_to_rec2020[9]; // adobe dng matrix or maybe from exif
+  uint32_t orientation;       // flip/rotate bits from exif
+  char     datetime[20];      // date time string
+  char     maker[32];         // camera maker string
+  char     model[32];         // camera model string
+  float    exposure;          // exposure value as shot
+  float    aperture;          // f-stop as shot
+  float    iso;               // iso value as shot
+  float    focal_length;      // focal length of lens
+
+  // from us:
+  float noise_a;              // raw noise estimate, gaussian part
+  float noise_b;              // raw noise estimate, poissonian part
 }
 dt_image_params_t;
 
@@ -40,6 +54,7 @@ typedef struct dt_module_t
   dt_module_so_t *so; // class of module
   dt_token_t name;    // mirrored class name
   dt_token_t inst;    // instance name
+  dt_graph_t *graph;  // pointing back to containing graph
 
 
   // TODO: has a list of publicly visible connectors
@@ -65,8 +80,8 @@ typedef struct dt_module_t
   uint8_t *committed_param;
   int      committed_param_size;
 
-  uint32_t              uniform_offset; // offset into global uniform buffer
-  uint32_t              uniform_size;   // size of module params padded to 16 byte multiples
+  uint32_t uniform_offset; // offset into global uniform buffer
+  uint32_t uniform_size;   // size of module params padded to 16 byte multiples
 
   // this is useful for instance for a cpu caching of
   // input data decoded from disk inside a module:
@@ -86,3 +101,18 @@ int dt_module_get_connector(const dt_module_t *m, dt_token_t conn);
 
 // remove module from the graph
 int dt_module_remove(dt_graph_t *graph, const int modid);
+
+// convenience functions for simple cases where the graph degenerates to
+// a simple linear chain of "output" being plugged into "input" connectors.
+// will return -1 if that's not the case or there's no such connection.
+int dt_module_get_module_before(const dt_graph_t *graph, const dt_module_t *us, int *conn);
+
+// note that the get_module_after() case is much more expensive, as it needs to exhaustively
+// search the list of modules and will return all connected modules.
+// returns the count of filled elements in the given m_out and c_out arrays.
+int dt_module_get_module_after(
+    const dt_graph_t  *graph,      // the associated graph
+    const dt_module_t *us,         // your module
+    int               *m_out,      // buffer to store module ids
+    int               *c_out,      // buffer to store input connector ids
+    int                max_cnt);   // size of the argument buffers

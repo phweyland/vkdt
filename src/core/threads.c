@@ -15,12 +15,6 @@
 threads_t thr;
 _Thread_local threads_tls_t thr_tls;
 
-#define threads_mutex_t          pthread_mutex_t
-#define threads_mutex_lock(m)    pthread_mutex_lock(m)
-#define threads_mutex_unlock(m)  pthread_mutex_unlock(m)
-#define threads_mutex_destroy(m) pthread_mutex_destroy(m)
-#define threads_mutex_init(m, p) pthread_mutex_init(m, p)
-
 typedef struct threads_t
 {
   uint32_t               num_threads;
@@ -36,12 +30,6 @@ typedef struct threads_t
   int shutdown;
 }
 threads_t;
-
-typedef struct threads_tls_t
-{
-  uint32_t tid; // thread id from 0..num_threads-1
-}
-threads_tls_t;
 
 // per-worker initialisation
 static void *threads_tls_init_one(void *arg)
@@ -134,6 +122,8 @@ static inline void threads_tls_init(threads_t *t)
     pthread_pool_task_init(t->task + k, &t->pool, threads_tls_init_one, tid+k);
   }
   pthread_pool_wait(&t->pool);
+  for(uint64_t k=0;k<t->num_threads;k++)
+    pthread_pool_task_destroy(t->task + k);
 }
 
 void threads_global_init()
@@ -153,6 +143,8 @@ static inline void threads_tls_cleanup(threads_t *t)
     pthread_pool_task_init(t->task + k, &t->pool, threads_tls_cleanup_one, tid+k);
   }
   pthread_pool_wait(&t->pool);
+  for(uint64_t k=0;k<t->num_threads;k++)
+    pthread_pool_task_destroy(t->task + k);
 }
 
 static inline void threads_cleanup(threads_t *t)
@@ -180,11 +172,8 @@ void threads_task(int task, void *(*func)(void *arg), void *arg)
 void threads_wait()
 {
   pthread_pool_wait(&thr.pool);
-}
-
-int threads_num()
-{
-  return thr.num_threads;
+  for(uint64_t k=0;k<thr.num_threads;k++)
+    pthread_pool_task_destroy(thr.task + k);
 }
 
 void threads_shutdown()
@@ -195,4 +184,9 @@ void threads_shutdown()
 int threads_shutting_down()
 {
   return thr.shutdown;
+}
+
+int threads_num()
+{
+  return thr.num_threads;
 }

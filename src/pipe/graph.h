@@ -3,6 +3,8 @@
 #include "module.h"
 #include "alloc.h"
 
+// TODO: sanitise flags before run()!
+// create nodes requires roi requires alloc requires upload source
 typedef enum dt_graph_run_t
 {
   s_graph_run_none           = 0,
@@ -98,6 +100,7 @@ typedef struct dt_graph_t
   int                   active_module; // currently active module, relevant for runflags
 
   int                   frame;
+  int                   frame_cnt;     // number of frames to compute
 
   // scale output resolution to fit and copy the main display to the given buffer:
   VkImage               thumbnail_image;
@@ -106,6 +109,7 @@ typedef struct dt_graph_t
   void                 *io_mutex;      // if this is set to != 0 will be locked during read_source() calls
 
   int                   gui_attached;  // can't free the output images while still used etc.
+  char                  searchpath[512];
 }
 dt_graph_t;
 

@@ -74,9 +74,8 @@ typedef struct dt_connector_t
   int connected_mi;  // pointing to connected module or node (or -1). is a reference count for write buffers.
   int connected_mc;  // index of the connector on the module
 
-  // module only:
-  int connected_ni;  // pointing to connected node after create_nodes has been called
-  int connected_nc;  // index of the connector on the node
+  int associated_i; // for nodes, points back to module if repointing is needed
+  int associated_c; 
 
   // information about buffer dimensions transported here:
   dt_roi_t roi;
@@ -212,13 +211,7 @@ dt_connector_vkformat(const dt_connector_t *c)
       case 4: return VK_FORMAT_R8G8B8A8_UNORM;
     }
     case dt_token("bc1") : return VK_FORMAT_BC1_RGB_UNORM_BLOCK;
-                           // XXX FIXME: display format for intel is
-                           // VK_FORMAT_B8G8R8A8_UNORM
-                           // which is not supported as a storage format :(
-                           // TODO: need to detect 10 bit and explicitly set
-                           // to yet another surface format stored somewhere
-    // case dt_token("dspy"): return qvk.surf_format.format;
-    case dt_token("dspy"): return VK_FORMAT_R8G8B8A8_UNORM;
+    case dt_token("dspy"): return qvk.surf_format.format;
   }
   return VK_FORMAT_UNDEFINED;
 }

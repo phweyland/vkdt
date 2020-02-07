@@ -10,15 +10,82 @@
 #include "gui/view.h"
 #include "db/db.h"
 
-#include <SDL.h>
-#include <SDL_vulkan.h>
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
 #include <stdio.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 dt_gui_t vkdt;
+
+static int g_running = 1;
+static int g_busy = 3;
+static int g_fullscreen = 0;
+
+static void
+key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
+{
+  dt_view_keyboard(window, key, scancode, action, mods);
+  dt_gui_imgui_keyboard(window, key, scancode, action, mods);
+
+  if(key == GLFW_KEY_X && action == GLFW_PRESS && mods == GLFW_MOD_CONTROL)
+  {
+    g_running = 0;
+  }
+  else if(key == GLFW_KEY_F11 && action == GLFW_PRESS)
+  {
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    if(g_fullscreen)
+    {
+      glfwSetWindowPos(qvk.window, mode->width/8, mode->height/8);
+      glfwSetWindowSize(qvk.window, mode->width/4 * 3, mode->height/4 * 3);
+      g_fullscreen = 0;
+    }
+    else
+    {
+      glfwSetWindowPos(qvk.window, 0, 0);
+      glfwSetWindowSize(qvk.window, mode->width, mode->height);
+      g_fullscreen = 1;
+    }
+    dt_gui_recreate_swapchain();
+  }
+}
+
+static void
+mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+{
+  dt_view_mouse_button(window, button, action, mods);
+  dt_gui_imgui_mouse_button(window, button, action, mods);
+}
+
+static void
+mouse_position_callback(GLFWwindow* window, double x, double y)
+{
+  dt_view_mouse_position(window, x, y);
+}
+
+static void
+window_size_callback(GLFWwindow* window, int width, int height)
+{
+  // window resized, need to rebuild our swapchain:
+  dt_gui_recreate_swapchain();
+}
+
+static void
+char_callback(GLFWwindow* window, unsigned int c)
+{
+  dt_gui_imgui_character(window, c);
+}
+
+static void
+scroll_callback(GLFWwindow *window, double xoff, double yoff)
+{
+  dt_gui_imgui_scrolled(window, xoff, yoff);
+}
 
 int main(int argc, char *argv[])
 {
@@ -42,6 +109,13 @@ int main(int argc, char *argv[])
     exit(1);
   }
 
+  glfwSetKeyCallback(qvk.window, key_callback);
+  glfwSetWindowSizeCallback(qvk.window, window_size_callback);
+  glfwSetMouseButtonCallback(qvk.window, mouse_button_callback);
+  glfwSetCursorPosCallback(qvk.window, mouse_position_callback);
+  glfwSetCharCallback(qvk.window, char_callback);
+  glfwSetScrollCallback(qvk.window, scroll_callback);
+
   dt_thumbnails_t *tmp_tn = 0;
   vkdt.view_mode = s_view_cnt;
   if((statbuf.st_mode & S_IFMT) == S_IFDIR)
@@ -61,7 +135,7 @@ int main(int argc, char *argv[])
     tmp_tn = malloc(sizeof(dt_thumbnails_t));
     // only width/height will matter here
     dt_thumbnails_init(tmp_tn, 400, 400, 0, 0);
-    dt_thumbnails_cache_directory(tmp_tn, fname);
+    dt_thumbnails_cache_collection(tmp_tn, &vkdt.db);
   }
   else
   {
@@ -73,66 +147,17 @@ int main(int argc, char *argv[])
   }
 
   // main loop
-  int running = 1;
-  int fullscreen = 0;
-  int busy = 1;   // go to idle only after a few frames have passed since interaction
   clock_t beg = clock();
-  while(running)
+  while(g_running)
   {
-    SDL_Event event;
     // block and wait for one event instead of polling all the time to save on
     // gpu workload. might need an interrupt for "render finished" etc. we might
-    // do that via SDL_PushEvent().
-    int have_event = 1;
-    if(busy >= 0)
-      have_event = SDL_PollEvent(&event);
-    else           SDL_WaitEvent(&event);
-    if(have_event) do
-    {
-      if(dt_gui_poll_event_imgui(&event))
-        ;
-      else if(event.type == SDL_QUIT)
-        running = 0;
-      else if(event.type == SDL_KEYDOWN &&
-           event.key.keysym.sym == SDLK_ESCAPE)
-      {
-        running = 0;
-      }
-      else if(event.type == SDL_KEYDOWN &&
-              event.key.keysym.sym == SDLK_F11)
-      {
-        if(fullscreen)
-        {
-          SDL_SetWindowSize(qvk.window, 1600, 800);
-          SDL_SetWindowPosition(qvk.window, 30, 40);
-          fullscreen = 0;
-        }
-        else
-        {
-          SDL_DisplayMode mode;
-          SDL_GetCurrentDisplayMode(0, &mode); // TODO get current screen
-          dt_log(s_log_gui, "display mode %d %d\n", mode.w, mode.h);
-          SDL_RestoreWindow(qvk.window);
-          SDL_SetWindowSize(qvk.window, mode.w, mode.h);
-          SDL_SetWindowPosition(qvk.window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-          fullscreen = 1;
-        }
-        dt_gui_recreate_swapchain();
-      }
-      else if(event.type == SDL_WINDOWEVENT &&
-          event.window.event == SDL_WINDOWEVENT_RESIZED &&
-          event.window.windowID == SDL_GetWindowID(qvk.window))
-      { // window resized, need to rebuild our swapchain:
-        dt_gui_recreate_swapchain();
-      }
-      else dt_view_handle_event(&event);
-      if(vkdt.state.anim_playing)
-        busy = vkdt.state.anim_max_frame;
-      else
-        busy = 2;
-    }
-    while (SDL_PollEvent(&event));
-    else busy--;
+    // do that via glfwPostEmptyEvent()
+    if(g_busy > 0) g_busy--;
+    if(vkdt.state.anim_playing) // should redraw because animation is playing?
+      g_busy = vkdt.state.anim_max_frame - vkdt.state.anim_frame - 1;
+    if(g_busy > 0) glfwPostEmptyEvent();
+    glfwWaitEvents();
 
     clock_t beg_rf = clock();
     dt_gui_render_frame_imgui();
@@ -145,12 +170,14 @@ int main(int argc, char *argv[])
     if(vkdt.state.anim_playing)
     {
       vkdt.graph_dev.frame = vkdt.state.anim_frame;
-      vkdt.graph_dev.runflags = s_graph_run_record_cmd_buf;
+      if(vkdt.state.anim_frame < vkdt.state.anim_max_frame)
+        vkdt.graph_dev.runflags = s_graph_run_record_cmd_buf;
     }
     dt_view_process();
-    if(vkdt.state.anim_playing)
-      vkdt.state.anim_frame = MIN(vkdt.state.anim_frame+1, vkdt.state.anim_max_frame);
-    else vkdt.state.anim_frame = 0;
+    if(!vkdt.state.anim_playing)
+      vkdt.state.anim_frame = 0;
+    else if(vkdt.state.anim_frame < vkdt.state.anim_max_frame-1)
+      vkdt.state.anim_frame++;
 
     clock_t end  = clock();
     dt_log(s_log_perf, "total frame time %2.3fs", (end - beg)/(double)CLOCKS_PER_SEC);
@@ -162,10 +189,12 @@ int main(int argc, char *argv[])
   // leave whatever view we're still in:
   dt_view_switch(s_view_cnt);
 
+  threads_shutdown();
   dt_gui_cleanup();
   dt_thumbnails_cleanup(&vkdt.thumbnails);
-  dt_db_cleanup(&vkdt.db);
-  threads_global_cleanup();
   if(tmp_tn) dt_thumbnails_cleanup(tmp_tn);
+  dt_db_cleanup(&vkdt.db);
+  dt_pipe_global_cleanup();
+  threads_global_cleanup();
   exit(0);
 }

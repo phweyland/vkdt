@@ -35,12 +35,14 @@ dt_graph_init(dt_graph_t *g)
 {
   memset(g, 0, sizeof(*g));
 
+  g->frame_cnt = 1;
+
   // allocate module and node buffers:
   g->max_modules = 100;
   g->module = calloc(sizeof(dt_module_t), g->max_modules);
   g->max_nodes = 4000;
   g->node = calloc(sizeof(dt_node_t), g->max_nodes);
-  dt_vkalloc_init(&g->heap, 100, 1ul<<40); // bytesize doesn't matter
+  dt_vkalloc_init(&g->heap, 1000, 1ul<<40); // bytesize doesn't matter
   dt_vkalloc_init(&g->heap_staging, 100, 1ul<<40);
   g->params_max = 16u<<20;
   g->params_end = 0;
@@ -124,6 +126,7 @@ dt_graph_cleanup(dt_graph_t *g)
   vkFreeMemory(qvk.device, g->vkmem, 0);
   vkFreeMemory(qvk.device, g->vkmem_staging, 0);
   vkFreeMemory(qvk.device, g->vkmem_uniform, 0);
+  g->vkmem_size = g->vkmem_staging_size = g->vkmem_uniform_size = 0;
   vkDestroyFence(qvk.device, g->command_fence, 0);
   vkDestroyQueryPool(qvk.device, g->query_pool, 0);
   vkDestroyCommandPool(qvk.device, g->command_pool, 0);
@@ -238,7 +241,7 @@ alloc_outputs(dt_graph_t *graph, dt_node_t *node)
       attachment_desc[i] = (VkAttachmentDescription) {
         .format         = dt_connector_vkformat(node->connector+k),
         .samples        = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR, // VK_ATTACHMENT_LOAD_OP_DONT_CARE, // XXX select on s_conn_clear flag?
+        .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR, // VK_ATTACHMENT_LOAD_OP_DONT_CARE, // select on s_conn_clear flag?
         .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -519,6 +522,7 @@ alloc_outputs(dt_graph_t *graph, dt_node_t *node)
         if(img->image) vkDestroyImage(qvk.device, img->image, VK_NULL_HANDLE);
         QVKR(vkCreateImage(qvk.device, &images_create_info, NULL, &img->image));
 #if 0 // nice debugging, but leaks memory
+#ifdef QVK_ENABLE_VALIDATION
         char *name = malloc(100); // leak this
         snprintf(name, 100, "%"PRItkn"_%"PRItkn"_%"PRItkn"@%d", dt_token_str(node->module->name), dt_token_str(node->kernel), dt_token_str(c->name), f);
         VkDebugMarkerObjectNameInfoEXT name_info = {
@@ -528,6 +532,7 @@ alloc_outputs(dt_graph_t *graph, dt_node_t *node)
           .pObjectName = name,
         };
         qvkDebugMarkerSetObjectNameEXT(qvk.device, &name_info);
+#endif
 #endif
 
         VkMemoryRequirements mem_req;
@@ -539,7 +544,10 @@ alloc_outputs(dt_graph_t *graph, dt_node_t *node)
         assert(!(mem_req.alignment & (mem_req.alignment - 1)));
 
         const size_t size = dt_connector_bufsize(c);
-        img->mem = dt_vkalloc(&graph->heap, mem_req.size, mem_req.alignment);
+        if(c->frames == 2 || c->type == dt_token("source")) // allocate protected memory
+          img->mem = dt_vkalloc_feedback(&graph->heap, mem_req.size, mem_req.alignment);
+        else
+          img->mem = dt_vkalloc(&graph->heap, mem_req.size, mem_req.alignment);
         // dt_log(s_log_pipe, "allocating %.1f/%.1f MB for %"PRItkn" %"PRItkn" "
         //     "%"PRItkn" %"PRItkn,
         //     mem_req.size/(1024.0*1024.0), size/(1024.0*1024.0), dt_token_str(node->name), dt_token_str(c->name),
@@ -613,10 +621,52 @@ alloc_outputs(dt_graph_t *graph, dt_node_t *node)
   return VK_SUCCESS;
 }
 
+
 // 2nd pass, now we have images and vkDeviceMemory, let's bind images and buffers
 // to memory and create descriptor sets
 static inline VkResult
 alloc_outputs2(dt_graph_t *graph, dt_node_t *node)
+{
+  for(int i=0;i<node->num_connectors;i++) if(dt_connector_output(node->connector+i))
+  { // allocate our output buffers
+    dt_connector_t *c = node->connector+i;
+    VkFormat format = dt_connector_vkformat(c);
+    for(int f=0;f<c->frames;f++) for(int k=0;k<MAX(1,c->array_length);k++)
+    {
+      dt_connector_image_t *img = dt_graph_connector_image(graph,
+          node - graph->node, i, k, f);
+
+      // only actually backed by memory if we have all these frames.
+      // else we'll just point to the same image for all frames:
+      vkBindImageMemory(qvk.device, img->image, graph->vkmem, img->offset);
+
+      // put all newly created images into right layout
+      VkCommandBuffer cmd_buf = graph->command_buffer;
+      IMG_LAYOUT(img, UNDEFINED, SHADER_READ_ONLY_OPTIMAL);
+
+      VkImageViewCreateInfo images_view_create_info = {
+        .sType      = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .viewType   = VK_IMAGE_VIEW_TYPE_2D,
+        .format     = format,
+        .image      = img->image,
+        .subresourceRange = {
+          .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+          .baseMipLevel   = 0,
+          .levelCount     = 1,
+          .baseArrayLayer = 0,
+          .layerCount     = 1
+        },
+      };
+      if(img->image_view) vkDestroyImageView(qvk.device, img->image_view, VK_NULL_HANDLE);
+      QVKR(vkCreateImageView(qvk.device, &images_view_create_info, NULL, &img->image_view));
+    }
+  }
+  return VK_SUCCESS;
+}
+
+// initialise descriptor sets, bind staging buffer memory
+static inline VkResult
+alloc_outputs3(dt_graph_t *graph, dt_node_t *node)
 {
   if(node->dset_layout)
   { // this is not set for source nodes. create descriptor set(s) for other nodes:
@@ -677,7 +727,6 @@ alloc_outputs2(dt_graph_t *graph, dt_node_t *node)
     dt_connector_t *c = node->connector+i;
     if(dt_connector_output(c))
     { // allocate our output buffers
-      VkFormat format = dt_connector_vkformat(c);
       for(int f=0;f<DT_GRAPH_MAX_FRAMES;f++)
       {
         int ii = cur_dset;
@@ -686,36 +735,11 @@ alloc_outputs2(dt_graph_t *graph, dt_node_t *node)
           dt_connector_image_t *img = dt_graph_connector_image(graph,
               node - graph->node, i, k, MIN(f, c->frames-1));
 
-          if(c->frames > f)
-          { // only actually backed by memory if we have all these frames.
-            // else we'll just point to the same image for all frames:
-            vkBindImageMemory(qvk.device, img->image, graph->vkmem, img->offset);
-
-            // put all newly created images into right layout
-            VkCommandBuffer cmd_buf = graph->command_buffer;
-            IMG_LAYOUT(img, UNDEFINED, SHADER_READ_ONLY_OPTIMAL);
-
-            VkImageViewCreateInfo images_view_create_info = {
-              .sType      = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-              .viewType   = VK_IMAGE_VIEW_TYPE_2D,
-              .format     = format,
-              .image      = img->image,
-              .subresourceRange = {
-                .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel   = 0,
-                .levelCount     = 1,
-                .baseArrayLayer = 0,
-                .layerCount     = 1
-              },
-            };
-            if(img->image_view) vkDestroyImageView(qvk.device, img->image_view, VK_NULL_HANDLE);
-            QVKR(vkCreateImageView(qvk.device, &images_view_create_info, NULL, &img->image_view));
-          }
-
           int iii = cur_dset++;
           assert(iii < sizeof(img_info)/sizeof(img_info[0]));
           img_info[iii].sampler     = VK_NULL_HANDLE;
           img_info[iii].imageView   = img->image_view;
+          assert(img->image_view);
           img_info[iii].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         }
         int dset = node_dset++;
@@ -757,8 +781,9 @@ alloc_outputs2(dt_graph_t *graph, dt_node_t *node)
             dt_connector_image_t *img  = dt_graph_connector_image(graph,
                 node - graph->node, i, k, frame);
             int iii = cur_dset++;
-            img_info[iii].sampler     = (c->flags & s_conn_smooth) ? qvk.tex_sampler : qvk.tex_sampler_nearest;
+            img_info[iii].sampler     = c->type == dt_token("sink") ? qvk.tex_sampler_nearest : qvk.tex_sampler;
             img_info[iii].imageView   = img->image_view;
+            assert(img->image_view);
             img_info[iii].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
           }
           int dset = node_dset++;
@@ -774,8 +799,9 @@ alloc_outputs2(dt_graph_t *graph, dt_node_t *node)
       else
       { // else sorry not connected, buffer will not be bound.
         // unconnected inputs are a problem however:
-        dt_log(s_log_err | s_log_pipe, "kernel %"PRItkn"_%"PRItkn":%"PRItkn" is not connected!",
-            dt_token_str(node->name), dt_token_str(node->kernel), dt_token_str(node->connector[i].name));
+        dt_log(s_log_err | s_log_pipe, "kernel %"PRItkn"_%"PRItkn"_%"PRItkn":%"PRItkn" is not connected!",
+            dt_token_str(node->name), dt_token_str(node->module->inst),
+            dt_token_str(node->kernel), dt_token_str(node->connector[i].name));
       }
       if(c->type == dt_token("sink"))
         vkBindBufferMemory(qvk.device, c->staging, graph->vkmem_staging, c->offset_staging);
@@ -873,17 +899,17 @@ modify_roi_out(dt_graph_t *graph, dt_module_t *module)
     c = module->connector + input;
     module->img_param = graph->module[c->connected_mi].img_param;
   }
-  if(module->so->modify_roi_out)
+  for(int i=0;i<module->num_connectors;i++)
   { // keep incoming roi in sync:
-    for(int i=0;i<module->num_connectors;i++)
+    dt_connector_t *c = module->connector+i;
+    if(dt_connector_input(c) && c->connected_mi >= 0 && c->connected_mc >= 0)
     {
-      dt_connector_t *c = module->connector+i;
-      if(dt_connector_input(c) && c->connected_mi >= 0 && c->connected_mc >= 0)
-      {
-        dt_roi_t *roi = &graph->module[c->connected_mi].connector[c->connected_mc].roi;
-        c->roi = *roi;
-      }
+      dt_roi_t *roi = &graph->module[c->connected_mi].connector[c->connected_mc].roi;
+      c->roi = *roi;
     }
+  }
+  if(module->so->modify_roi_out)
+  {
     module->so->modify_roi_out(graph, module);
     // mark roi in of all outputs as uninitialised:
     for(int i=0;i<module->num_connectors;i++)
@@ -939,12 +965,15 @@ modify_roi_in(dt_graph_t *graph, dt_module_t *module)
       r->scale = 1.0f;
       // this is the performance/LOD switch for faster processing
       // on low end computers. needs to be wired somehow in gui/config.
-      if(module->inst == dt_token("main"))
+      if(module->connector[0].type == dt_token("sink") &&
+         module->inst == dt_token("main"))
       { // scale to fit into requested roi
         if(graph->output_wd > 0 || graph->output_ht > 0)
+        {
           r->scale = MAX(
               r->full_wd / (float) graph->output_wd,
               r->full_ht / (float) graph->output_ht);
+        }
       }
       r->wd = r->full_wd/r->scale;
       r->ht = r->full_ht/r->scale;
@@ -976,10 +1005,18 @@ modify_roi_in(dt_graph_t *graph, dt_module_t *module)
       if(c->connected_mi >= 0 && c->connected_mc >= 0)
       {
         dt_roi_t *roi = &graph->module[c->connected_mi].connector[c->connected_mc].roi;
+        if(graph->module[c->connected_mi].connector[c->connected_mc].type == dt_token("source"))
+        { // sources don't negotiate their size, they just give what they have
+          roi->wd = roi->full_wd;
+          roi->ht = roi->full_ht;
+          c->roi = *roi; // TODO: this may mean that we need a resample node if the module can't handle it!
+          // TODO: insert manually here
+        }
         // if roi->scale > 0 it has been inited before and we're late to the party!
         // in this case, reverse the process:
-        if(roi->scale > 0.0f)
+        else if(roi->scale > 0.0f)
           c->roi = *roi; // TODO: this may mean that we need a resample node if the module can't handle it!
+          // TODO: insert manually here
         else
           *roi = c->roi;
         // propagate flags:
@@ -1027,7 +1064,11 @@ record_command_buffer(dt_graph_t *graph, dt_node_t *node, int *runflag)
   for(int i=0;i<node->num_connectors;i++)
     if(dt_connector_input(node->connector+i))
       if(node->connector[i].connected_mi == -1)
+      {
+        dt_log(s_log_err, "input %"PRItkn":%"PRItkn" not connected!",
+            dt_token_str(node->name), dt_token_str(node->connector[i].name));
         return VK_INCOMPLETE;
+      }
 
   // special case for end of pipeline and thumbnail creation:
   if(graph->thumbnail_image &&
@@ -1311,14 +1352,7 @@ count_references(dt_graph_t *graph, dt_node_t *node)
       // up reference counter of the connector that owns the output
       int mi = node->connector[c].connected_mi;
       int mc = node->connector[c].connected_mc;
-      graph->node[mi].connector[mc].connected_mi++;
-#if 0
-      // XXX this is now explicitly not freed in free_inputs()
-      // feedback connectors need to persist until the next frame.
-      // up the reference counter out of line once to make sure:
-      // if(graph->node[mi].connector[mc].flags & s_conn_feedback)
-        // graph->node[mi].connector[mc].connected_mi++;
-#endif
+      if(mi != -1) graph->node[mi].connector[mc].connected_mi++;
       // dt_log(s_log_pipe, "references %d on output %"PRItkn"_%"PRItkn":%"PRItkn,
       //     graph->node[mi].connector[mc].connected_mi,
       //     dt_token_str(graph->node[mi].name),
@@ -1329,6 +1363,7 @@ count_references(dt_graph_t *graph, dt_node_t *node)
     {
       // output cannot know all modules connected to it, so
       // it stores the reference counter instead.
+      // we increase it here because every node needs its own outputs for processing.
       node->connector[c].connected_mi++;
       // dt_log(s_log_pipe, "references %d on output %"PRItkn"_%"PRItkn":%"PRItkn,
       //     node->connector[c].connected_mi,
@@ -1464,8 +1499,17 @@ VkResult dt_graph_run(
   graph->query_cnt = 0;
 
 { // module scope
+  // find list of modules in post order
+  uint32_t modid[100];
+  assert(sizeof(modid)/sizeof(modid[0]) >= graph->num_modules);
+
+  int cnt = 0;
   dt_module_t *const arr = graph->module;
   const int arr_cnt = graph->num_modules;
+#define TRAVERSE_POST \
+  modid[cnt++] = curr;
+#include "graph-traverse.inc"
+
   // ==============================================
   // first pass: find output rois
   // ==============================================
@@ -1473,15 +1517,17 @@ VkResult dt_graph_run(
   // "int curr" will be the current node
   // walk all inputs and determine roi on all outputs
   if(run & s_graph_run_roi)
-  {
-#define TRAVERSE_POST \
-    modify_roi_out(graph, arr+curr);
-#include "graph-traverse.inc"
-  }
+    for(int i=0;i<cnt;i++)
+      modify_roi_out(graph, graph->module + modid[i]);
 
-  // TODO: if the roi out is 0, probably reading some sources went wrong and we need to abort right here!
+  // if the roi out is 0, probably reading some sources went wrong and we need
+  // to abort right here!
   if(graph->module[graph->num_modules-1].connector[0].roi.full_wd == 0)
+  {
+    dt_log(s_log_err, "roi of last module %"PRItkn" did not get initialised!",
+        dt_token_str(graph->module[graph->num_modules-1].name));
     return VK_INCOMPLETE;
+  }
 
   // now we don't always want the full size buffer but are interested in a
   // scaled or cropped sub-region. actually this step is performed
@@ -1517,29 +1563,49 @@ VkResult dt_graph_run(
     }
     graph->uniform_global_size = qvk.uniform_alignment; // global data, aligned
     uint64_t uniform_offset = graph->uniform_global_size;
-#define TRAVERSE_PRE\
-    modify_roi_in(graph, arr+curr);
-#define TRAVERSE_POST\
-    create_nodes(graph, arr+curr, &uniform_offset);
-    // TODO: in fact this should only be an error for default create nodes cases:
-    // TODO: the others might break the cycle by pushing more nodes.
-#define TRAVERSE_CYCLE\
-    dt_log(s_log_pipe, "module cycle %"PRItkn"->%"PRItkn"!", dt_token_str(arr[curr].name), dt_token_str(arr[el].name));\
-    dt_module_connect(graph, -1,-1, curr, i);
-#include "graph-traverse.inc"
+    for(int i=cnt-1;i>=0;i--)
+      modify_roi_in(graph, graph->module+modid[i]);
+    for(int i=0;i<cnt;i++)
+      create_nodes(graph, graph->module+modid[i], &uniform_offset);
     // make sure connectors are zero inited:
     memset(graph->conn_image_pool, 0, sizeof(dt_connector_image_t)*graph->conn_image_end);
     graph->uniform_size = uniform_offset;
 
     // these feedback connectors really cause a lot of trouble.
     // we need to initialise the input connectors now after full graph traversal.
-    // this means we need the feedback connectors to go last in the connectors file
-    for(int m=0;m<graph->num_modules;m++)
-      for(int i=0;i<graph->module[m].num_connectors;i++)
-        if(graph->module[m].connector[i].flags & s_conn_feedback)
-          dt_connector_copy(graph, graph->module+m, i,
-              graph->module[m].connector[i].connected_ni,
-              graph->module[m].connector[i].connected_nc);
+    // or else the connection performed during node creation will copy some node id
+    // from the connected module that has not yet been initialised.
+    // we work around this by storing the *module* id and connector in
+    // dt_connector_copy() for feedback connectors, and repoint it here.
+    // i suppose we could always do that, not only for feedback connectors, to
+    // simplify control logic.
+    for(int ni=0;ni<graph->num_nodes;ni++)
+    {
+      dt_node_t *n = graph->node + ni;
+      for(int i=0;i<n->num_connectors;i++)
+      {
+        if(n->connector[i].associated_i >= 0) // needs repointing
+        {
+          int n0, c0;
+          int mi0 = n->connector[i].associated_i;
+          int mc0 = n->connector[i].associated_c;
+          if(dt_connector_input(n->connector+i))
+          { // walk node->module->module->node
+            int mi1 = graph->module[mi0].connector[mc0].connected_mi;
+            int mc1 = graph->module[mi0].connector[mc0].connected_mc;
+            n0 = graph->module[mi1].connector[mc1].associated_i;
+            c0 = graph->module[mi1].connector[mc1].associated_c;
+          }
+          else // if(dt_connector_output(n->connector+i))
+          { // walk node->module->node
+            n0 = graph->module[mi0].connector[mc0].associated_i;
+            c0 = graph->module[mi0].connector[mc0].associated_c;
+          }
+          n->connector[i].connected_mi = n0;
+          n->connector[i].connected_mc = c0;
+        }
+      }
+    }
   }
 } // end scope, done with modules
 
@@ -1547,26 +1613,17 @@ VkResult dt_graph_run(
   if(run < s_graph_run_create_nodes<<1) return VK_SUCCESS;
 
 { // node scope
+  int cnt = 0;
   dt_node_t *const arr = graph->node;
   const int arr_cnt = graph->num_nodes;
-
-  // ==============================================
-  // TODO: tiling:
-  // ==============================================
-#if 0
-  // TODO: while(not happy) {
-  // TODO: 3rd pass: compute memory requirements
-  // TODO: if not happy: cut input roi in half or what
-#define TRAVERSE_POST\
-    alloc_outputs(allocator, arr+curr);\
-    free_inputs (allocator, arr+curr);
+  uint32_t nodeid[2000];
+  assert(sizeof(nodeid)/sizeof(nodeid[0]) >= graph->num_nodes);
+#define TRAVERSE_POST \
+  nodeid[cnt++] = curr;
 #include "graph-traverse.inc"
-  // }
-  // TODO: do that one after the other for all chopped roi
-#endif
 
   // ==============================================
-  // 1st pass alloc and free, detect cycles
+  // 1st pass alloc and free
   // ==============================================
   if(run & s_graph_run_alloc)
   {
@@ -1577,9 +1634,8 @@ VkResult dt_graph_run(
           graph->node[n].connector[c].connected_mi = 0;
     // perform reference counting on the final connected node graph.
     // this is needed for memory allocation later:
-#define TRAVERSE_PRE\
-    count_references(graph, arr+curr);
-#include "graph-traverse.inc"
+    for(int i=0;i<cnt;i++)
+      count_references(graph, graph->node+nodeid[i]);
     // free pipeline resources if previously allocated anything:
     dt_vkalloc_nuke(&graph->heap);
     dt_vkalloc_nuke(&graph->heap_staging);
@@ -1589,20 +1645,16 @@ VkResult dt_graph_run(
     graph->dset_cnt_uniform = 1; // we have one global uniform for roi + params
     graph->memory_type_bits = ~0u;
     graph->memory_type_bits_staging = ~0u;
-#define TRAVERSE_POST\
-    QVKR(alloc_outputs(graph, arr+curr));\
-    free_inputs       (graph, arr+curr);
-#define TRAVERSE_CYCLE\
-    dt_log(s_log_pipe, "cycle %"PRItkn"_%"PRItkn"->%"PRItkn"_%"PRItkn"!", \
-        dt_token_str(arr[curr].name), dt_token_str(arr[curr].kernel), \
-        dt_token_str(arr[el].name), dt_token_str(arr[el].kernel)); \
-    dt_node_connect(graph, -1,-1, curr, i);
-#include "graph-traverse.inc"
+    for(int i=0;i<cnt;i++)
+    {
+      QVKR(alloc_outputs(graph, graph->node+nodeid[i]));
+      free_inputs       (graph, graph->node+nodeid[i]);
+    }
   }
 
-  // TODO: should all this allocation be put behind a runflag?
   if(graph->heap.vmsize > graph->vkmem_size)
   {
+    run |= s_graph_run_upload_source; // new mem means new source
     if(graph->vkmem)
     {
       QVKR(vkDeviceWaitIdle(qvk.device));
@@ -1621,6 +1673,7 @@ VkResult dt_graph_run(
 
   if(graph->heap_staging.vmsize > graph->vkmem_staging_size)
   {
+    run |= s_graph_run_upload_source; // new mem means new source
     if(graph->vkmem_staging)
     {
       QVKR(vkDeviceWaitIdle(qvk.device));
@@ -1694,7 +1747,7 @@ VkResult dt_graph_run(
         .descriptorCount = 1+DT_GRAPH_MAX_FRAMES*graph->dset_cnt_buffer,
       }, {
         .type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1+2*graph->num_nodes+DT_GRAPH_MAX_FRAMES*graph->dset_cnt_uniform,
+        .descriptorCount = 1+DT_GRAPH_MAX_FRAMES*(graph->num_nodes+graph->dset_cnt_uniform),
       }};
 
       VkDescriptorPoolCreateInfo pool_info = {
@@ -1703,6 +1756,7 @@ VkResult dt_graph_run(
         .pPoolSizes    = pool_sizes,
         .maxSets       = DT_GRAPH_MAX_FRAMES*(
             graph->dset_cnt_image_read + graph->dset_cnt_image_write
+          + graph->num_nodes
           + graph->dset_cnt_buffer     + graph->dset_cnt_uniform),
       };
       if(graph->dset_pool)
@@ -1755,12 +1809,17 @@ VkResult dt_graph_run(
   // ==============================================
   // 2nd pass finish alloc and record commmand buf
   // ==============================================
-  int runflag = (run & s_graph_run_upload_source) ? 1 : 0;
-#define TRAVERSE_POST\
-  if(run & s_graph_run_alloc)          QVKR(alloc_outputs2(graph, arr+curr));\
-  if(run & s_graph_run_record_cmd_buf) QVKR(record_command_buffer(graph, arr+curr, &runflag));
-#include "graph-traverse.inc"
+  if(run & s_graph_run_alloc)
+    for(int i=0;i<cnt;i++)
+      QVKR(alloc_outputs2(graph, graph->node+nodeid[i]));
 
+  if(run & s_graph_run_alloc)
+    for(int i=0;i<cnt;i++)
+      QVKR(alloc_outputs3(graph, graph->node+nodeid[i]));
+  int runflag = (run & s_graph_run_upload_source) ? 1 : 0;
+  if(run & s_graph_run_record_cmd_buf)
+    for(int i=0;i<cnt;i++)
+      QVKR(record_command_buffer(graph, graph->node+nodeid[i], &runflag));
 } // end scope, done with nodes
 
   if(run & s_graph_run_alloc)
@@ -1783,6 +1842,7 @@ VkResult dt_graph_run(
   uint8_t *uniform_mem = 0;
   QVKR(vkMapMemory(qvk.device, graph->vkmem_uniform, 0,
         graph->uniform_size, 0, (void**)&uniform_mem));
+  ((uint32_t *)uniform_mem)[0] = graph->frame;
 #define TRAVERSE_POST \
   dt_module_t *mod = arr+curr;\
   if(mod->so->commit_params)\
@@ -1843,6 +1903,7 @@ VkResult dt_graph_run(
         sizeof(graph->query_pool_results[0]),
         VK_QUERY_RESULT_64_BIT));
 
+  uint64_t accum_time = 0;
   for(int i=0;i<graph->query_cnt;i+=2)
   {
     dt_log(s_log_perf, "%"PRItkn"_%"PRItkn":\t%8.3f ms",
@@ -1850,7 +1911,11 @@ VkResult dt_graph_run(
         dt_token_str(graph->query_kernel[i]),
         (graph->query_pool_results[i+1]-
         graph->query_pool_results[i])* 1e-6 * qvk.ticks_to_nanoseconds);
+    if(graph->query_name[i] == dt_token("shared") || graph->query_name[i] == dt_token("burst"))
+      accum_time += graph->query_pool_results[i+1]- graph->query_pool_results[i];
   }
+  dt_log(s_log_perf, "total burst:\t%8.3f ms",
+      accum_time * 1e-6 * qvk.ticks_to_nanoseconds);
   if(graph->query_cnt)
     dt_log(s_log_perf, "total time:\t%8.3f ms",
         (graph->query_pool_results[graph->query_cnt-1]-graph->query_pool_results[0])*1e-6 * qvk.ticks_to_nanoseconds);
@@ -1893,7 +1958,7 @@ dt_graph_connector_image(
   }
   frame %= graph->node[nid2].connector[cid2].frames;
   return graph->conn_image_pool +
-    graph->node[nid].conn_image[cid] + graph->node[nid].connector[cid].array_length * frame + array;
+    graph->node[nid].conn_image[cid] + MAX(1,graph->node[nid].connector[cid].array_length) * frame + array;
 }
 
 void dt_graph_reset(dt_graph_t *g)
