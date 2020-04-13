@@ -18,22 +18,28 @@ threads_tls_t;
 
 
 extern threads_t thr;
+#ifdef __cplusplus
+extern thread_local threads_tls_t thr_tls;
+#else
 extern _Thread_local threads_tls_t thr_tls;
+#endif
 
 void threads_global_init();
 void threads_global_cleanup();
 
 // push a new task (task < threads_num()) with given function and argument
-void threads_task(int task, void *(*func)(void *arg), void *arg);
+int threads_task(
+    uint32_t       work_item_cnt,
+    uint32_t      *work_item,
+    void          *data,
+    void         (*run)(uint32_t item, void *data),
+    void         (*free)(void*));
 
 // abandon all work and prepare for shutdown
 void threads_shutdown();
 
 // query shutdown
 int threads_shutting_down();
-
-// wait for all tasks to complete
-void threads_wait();
 
 // return number of threads
 int threads_num();

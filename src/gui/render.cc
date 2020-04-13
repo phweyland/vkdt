@@ -376,6 +376,11 @@ void render_lighttable()
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0, 1.0, 1.0, 1.0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8, 0.8, 0.8, 1.0));
           }
+          else if(vkdt.db.image[vkdt.db.collection[i]].labels & s_image_label_selected)
+          {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6, 0.6, 0.6, 1.0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8, 0.8, 0.8, 1.0));
+          }
           float scale = MIN(
               wd/(float)vkdt.thumbnails.thumb[tid].wd,
               ht/(float)vkdt.thumbnails.thumb[tid].ht);
@@ -388,11 +393,23 @@ void render_lighttable()
               border,
               ImVec4(0.5f,0.5f,0.5f,1.0f),
               ImVec4(1.0f,1.0f,1.0f,1.0f));
-          if(vkdt.db.collection[i] == vkdt.db.current_image)
+          if(vkdt.db.collection[i] == vkdt.db.current_image ||
+            (vkdt.db.image[vkdt.db.collection[i]].labels & s_image_label_selected))
             ImGui::PopStyleColor(2);
 
           if(ret)
-            vkdt.db.current_image = vkdt.db.collection[i];
+          {
+            if(vkdt.db.image[vkdt.db.collection[i]].labels & s_image_label_selected)
+            {
+              dt_db_selection_remove(&vkdt.db, vkdt.db.collection[i]);
+              vkdt.db.current_image = -1u;
+            }
+            else
+            {
+              dt_db_selection_add(&vkdt.db, vkdt.db.collection[i]);
+              vkdt.db.current_image = vkdt.db.collection[i];
+            }
+          }
 
           if(k < ipl-1) ImGui::SameLine();
           // else NextColumn()
@@ -422,7 +439,14 @@ void render_lighttable()
     ImVec2 size(bwd*vkdt.state.panel_wd, 1.6*lineht);
     if(vkdt.db.current_image != -1u && ImGui::Button("export selected", size))
     {
-      dt_graph_export_quick(vkdt.db.image[vkdt.db.current_image].filename);
+      // TODO: put in background job, implement job scheduler
+      const uint32_t *sel = dt_db_selection_get(&vkdt.db);
+      char filename[256];
+      for(int i=0;i<vkdt.db.selection_cnt;i++)
+      {
+        snprintf(filename, sizeof(filename), "/tmp/img_%04d", i);
+        dt_graph_export_quick(vkdt.db.image[sel[i]].filename, filename);
+      }
     }
     ImGui::End(); // lt center window
   }
@@ -872,6 +896,8 @@ void render_darkroom_pipeline()
   uint64_t err = 0;
   int pos = 0, pos2 = 0; // find pos2 as the swapping position, where mod_id[pos2] = curr
   uint32_t modid[100], cnt = 0;
+  for(int m=0;m<graph->num_modules;m++)
+    modid[m] = m; // init as identity mapping
 
   if(last_err)
   {
@@ -929,7 +955,7 @@ void render_darkroom_pipeline()
         if(nid < 0) continue; // disconnected
         const float *q = vkdt.wstate.connector[nid][cid];
         float b = vkdt.state.panel_wd * 0.03;
-        int rev = nid; // TODO: store reverse list?
+        int rev;// = nid; // TODO: store reverse list?
         // this works mostly but seems to have edge cases where it doesn't:
         // if(nid < pos) while(mod_id[rev] != nid) rev = mod_id[rev];
         // else for(rev=pos;rev<graph->num_modules;rev++) if(mod_id[rev] == nid) break;
@@ -1078,25 +1104,25 @@ void render_darkroom()
       {
         if(ip->exposure >= 1.0f)
           if(nearbyintf(ip->exposure) == ip->exposure)
-            ImGui::Text("%.0f″ f/%.1f %dmm ISO %d", ip->exposure, ip->aperture,
+            ImGui::Text("%s %.0f″ f/%.1f %dmm ISO %d", ip->model, ip->exposure, ip->aperture,
                 (int)ip->focal_length, (int)ip->iso);
           else
-            ImGui::Text("%.1f″ f/%.1f %dmm ISO %d", ip->exposure, ip->aperture,
+            ImGui::Text("%s %.1f″ f/%.1f %dmm ISO %d", ip->model, ip->exposure, ip->aperture,
                 (int)ip->focal_length, (int)ip->iso);
         /* want to catch everything below 0.3 seconds */
         else if(ip->exposure < 0.29f)
-          ImGui::Text("1/%.0f f/%.1f %dmm ISO %d", 1.0 / ip->exposure, ip->aperture,
+          ImGui::Text("%s 1/%.0f f/%.1f %dmm ISO %d", ip->model, 1.0 / ip->exposure, ip->aperture,
               (int)ip->focal_length, (int)ip->iso);
         /* catch 1/2, 1/3 */
         else if(nearbyintf(1.0f / ip->exposure) == 1.0f / ip->exposure)
-          ImGui::Text("1/%.0f f/%.1f %dmm ISO %d", 1.0 / ip->exposure, ip->aperture,
+          ImGui::Text("%s 1/%.0f f/%.1f %dmm ISO %d", ip->model, 1.0 / ip->exposure, ip->aperture,
               (int)ip->focal_length, (int)ip->iso);
         /* catch 1/1.3, 1/1.6, etc. */
         else if(10 * nearbyintf(10.0f / ip->exposure) == nearbyintf(100.0f / ip->exposure))
-          ImGui::Text("1/%.1f f/%.1f %dmm ISO %d", 1.0 / ip->exposure, ip->aperture,
+          ImGui::Text("%s 1/%.1f f/%.1f %dmm ISO %d", ip->model, 1.0 / ip->exposure, ip->aperture,
               (int)ip->focal_length, (int)ip->iso);
         else
-          ImGui::Text("%.1f″ f/%.1f %dmm ISO %d", ip->exposure, ip->aperture,
+          ImGui::Text("%s %.1f″ f/%.1f %dmm ISO %d", ip->model, ip->exposure, ip->aperture,
               (int)ip->focal_length, (int)ip->iso);
       }
     }

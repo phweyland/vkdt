@@ -59,17 +59,25 @@ otherwise in the respective source files). there are parts from other libraries
 that are licenced differently. in particular:
 
 rawspeed:     LGPLv2
-pthread-pool: LGPLv2
 imgui:        MIT
 
 and we may link to some others, too.
 
 ## dependencies
-- clang to compile (for now, will restore gcc compat at some point)
 - vulkan, glslangValidator (libvulkan-dev, glslang-tools, or use the sdk)
 - glfw (libglfw3-dev)
 - submodule imgui
 - submodule rawspeed (pulls in pugixml, stdc++, zlib, jpeg, libomp-dev)
 - libjpeg
 - build: make
+optional (configure in `bin/config.mk`):
+- freetype (libfreetype-dev)
+- exiv2 (libexiv2-dev)
 
+
+## faq
+* can i run my super long running kernel without timeout?
+if you're using your only GPU in the system, you'll need to run without xorg,
+straight from a tty console. this means you'll only be able to use the
+command line interface ```vkdt-cli```. we force a timeout, too, but it's
+something like 16 minutes. let us know if you run into this..
