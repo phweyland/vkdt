@@ -59,7 +59,6 @@ key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 static void
 mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 {
-  printf("mouse_button_callback\n");
   dt_view_mouse_button(window, button, action, mods);
   dt_gui_imgui_mouse_button(window, button, action, mods);
 }
@@ -73,7 +72,6 @@ mouse_position_callback(GLFWwindow* window, double x, double y)
 static void
 window_size_callback(GLFWwindow* window, int width, int height)
 {
-  printf("window_size_callback\n");
   // window resized, need to rebuild our swapchain:
   dt_gui_recreate_swapchain();
 }
@@ -88,7 +86,6 @@ char_callback(GLFWwindow* window, unsigned int c)
 static void
 scroll_callback(GLFWwindow *window, double xoff, double yoff)
 {
-  printf("scroll_callback\n");
   dt_view_mouse_scrolled(window, xoff, yoff);
 }
 
@@ -153,7 +150,7 @@ int main(int argc, char *argv[])
 
   // main loop
   clock_t beg = clock();
-  while(g_running)
+  while(g_running && !glfwWindowShouldClose(qvk.window))
   {
     // block and wait for one event instead of polling all the time to save on
     // gpu workload. might need an interrupt for "render finished" etc. we might

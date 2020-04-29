@@ -29,7 +29,7 @@ style_to_state()
     .anim_max_frame = vkdt.state.anim_max_frame,
   };
 }
-  
+
 int dt_gui_init()
 {
   memset(&vkdt, 0, sizeof(vkdt));
@@ -48,7 +48,7 @@ int dt_gui_init()
   qvk.win_width  = mode->width;  //1920;
   qvk.win_height = mode->height; //1080;
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+  glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
   glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
   qvk.window = glfwCreateWindow(qvk.win_width, qvk.win_height, "vkdt", NULL, NULL);
   glfwSetWindowPos(qvk.window, 0, 0);
