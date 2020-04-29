@@ -15,3 +15,6 @@ lighttable_mouse_button(GLFWwindow* window, int button, int action, int mods) {}
 
 static inline void
 lighttable_mouse_position(GLFWwindow* window, double x, double y) {}
+
+static inline void
+lighttable_mouse_scrolled(GLFWwindow* window, double xoff, double yoff) {}
