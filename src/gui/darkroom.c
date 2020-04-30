@@ -176,29 +176,32 @@ darkroom_mouse_scrolled(GLFWwindow* window, double xoff, double yoff)
   double x, y;
   glfwGetCursorPos(qvk.window, &x, &y);
 
-  dt_node_t *out = dt_graph_get_display(&vkdt.graph_dev, dt_token("main"));
-  if(!out) return; // should never happen
-  assert(out);
-  vkdt.wstate.wd = (float)out->connector[0].roi.wd;
-  vkdt.wstate.ht = (float)out->connector[0].roi.ht;
+  if(x < vkdt.state.center_x + vkdt.state.center_wd)
+  {
+    dt_node_t *out = dt_graph_get_display(&vkdt.graph_dev, dt_token("main"));
+    if(!out) return; // should never happen
+    assert(out);
+    vkdt.wstate.wd = (float)out->connector[0].roi.wd;
+    vkdt.wstate.ht = (float)out->connector[0].roi.ht;
 
-  const float imwd = vkdt.state.center_wd, imht = vkdt.state.center_ht;
-  const float fit_scale = MIN(imwd/vkdt.wstate.wd, imht/vkdt.wstate.ht);
-  const float scale = vkdt.state.scale <= 0.0f ? fit_scale : vkdt.state.scale;
-  const float im_x = (x - (vkdt.state.center_x + imwd)/2.0f);
-  const float im_y = (y - (vkdt.state.center_y + imht)/2.0f);
-  vkdt.state.scale = scale * (yoff > 0.0f ? 1.1f : 0.9f);
-  vkdt.state.scale = CLAMP(vkdt.state.scale , 0.1f, 8.0f);
-  if(vkdt.state.scale >= fit_scale)
-  {
-    const float dscale = 1.0f/scale - 1.0f/vkdt.state.scale;
-    vkdt.state.look_at_x += im_x  * dscale;
-    vkdt.state.look_at_y += im_y  * dscale;
-  }
-  else
-  {
-    vkdt.state.look_at_x = vkdt.wstate.wd/2.0f;
-    vkdt.state.look_at_y = vkdt.wstate.ht/2.0f;
+    const float imwd = vkdt.state.center_wd, imht = vkdt.state.center_ht;
+    const float fit_scale = MIN(imwd/vkdt.wstate.wd, imht/vkdt.wstate.ht);
+    const float scale = vkdt.state.scale <= 0.0f ? fit_scale : vkdt.state.scale;
+    const float im_x = (x - (vkdt.state.center_x + imwd)/2.0f);
+    const float im_y = (y - (vkdt.state.center_y + imht)/2.0f);
+    vkdt.state.scale = scale * (yoff > 0.0f ? 1.1f : 0.9f);
+    vkdt.state.scale = CLAMP(vkdt.state.scale , 0.1f, 8.0f);
+    if(vkdt.state.scale >= fit_scale)
+    {
+      const float dscale = 1.0f/scale - 1.0f/vkdt.state.scale;
+      vkdt.state.look_at_x += im_x  * dscale;
+      vkdt.state.look_at_y += im_y  * dscale;
+    }
+    else
+    {
+      vkdt.state.look_at_x = vkdt.wstate.wd/2.0f;
+      vkdt.state.look_at_y = vkdt.wstate.ht/2.0f;
+    }
   }
 }
 
