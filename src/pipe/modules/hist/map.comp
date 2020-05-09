@@ -39,8 +39,8 @@ main()
 
   uint img_ht = texelFetch(img_in_b, ivec2(0, 0), 0).r;
   vec3 rgb = 1.0/float(img_ht)*vec3(texelFetch(img_in_r, ipos, 0).r,
-                             texelFetch(img_in_g, ipos, 0).r,
-                             texelFetch(img_in_b, ipos, 0).r);
+                                    texelFetch(img_in_g, ipos, 0).r,
+                                    texelFetch(img_in_b, ipos, 0).r);
   rgb = clamp(rgb, 0.0, 1.0);
   rgb = pow(rgb, vec3(0.5));
   if(params.mode < 0.1)

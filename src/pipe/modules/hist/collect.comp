@@ -45,6 +45,6 @@ main()
   imageAtomicAdd(img_out_r, ivec2(opos, y.r), 1);
   uint g_max = imageAtomicAdd(img_out_g, ivec2(opos, y.g), 1);
   imageAtomicAdd(img_out_b, ivec2(opos, y.b), 1);
-  // ugly - just to pass the max count
+  // ugly - just to pass the max count to map
   imageAtomicMax(img_out_b, ivec2(0, 0), g_max+1);
 }
