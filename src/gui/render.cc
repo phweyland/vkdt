@@ -132,7 +132,7 @@ inline void dark_corporate_style()
 
 	/// 0 = FLAT APPEARENCE
 	/// 1 = MORE "3D" LOOK
-	int is3D = 0;
+	int is3D = 1;
 
 	colors[ImGuiCol_Text]                   = gamma(ImVec4(1.00f, 1.00f, 1.00f, 1.00f));
 	colors[ImGuiCol_TextDisabled]           = gamma(ImVec4(0.40f, 0.40f, 0.40f, 1.00f));
@@ -452,7 +452,7 @@ void render_lighttable()
     ImGui::SetNextWindowPos (ImVec2(qvk.win_width - vkdt.state.panel_wd, 0),    ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(vkdt.state.panel_wd, vkdt.state.panel_ht), ImGuiCond_Always);
     ImGui::Begin("panel-right", 0, window_flags);
-    
+
     float lineht = ImGui::GetTextLineHeight();
     float bwd = 0.5f;
     ImVec2 size(bwd*vkdt.state.panel_wd, 1.6*lineht);
@@ -760,7 +760,7 @@ inline void draw_widget(int modid, int parid)
       // TODO: distinguish by count:
       if(vkdt.graph_dev.module[modid].so->param[parid]->type == dt_token("float"))
       {
-        float *val = (float*)(vkdt.graph_dev.module[modid].param + 
+        float *val = (float*)(vkdt.graph_dev.module[modid].param +
           vkdt.graph_dev.module[modid].so->param[parid]->offset);
         char str[10] = {0};
         memcpy(str,
@@ -778,7 +778,7 @@ inline void draw_widget(int modid, int parid)
       }
       else if(vkdt.graph_dev.module[modid].so->param[parid]->type == dt_token("int"))
       {
-        int32_t *val = (int32_t*)(vkdt.graph_dev.module[modid].param + 
+        int32_t *val = (int32_t*)(vkdt.graph_dev.module[modid].param +
           vkdt.graph_dev.module[modid].so->param[parid]->offset);
         char str[10] = {0};
         memcpy(str,
@@ -798,7 +798,7 @@ inline void draw_widget(int modid, int parid)
     }
     case dt_token("quad"):
     {
-      float *v = (float*)(vkdt.graph_dev.module[modid].param + 
+      float *v = (float*)(vkdt.graph_dev.module[modid].param +
         vkdt.graph_dev.module[modid].so->param[parid]->offset);
       if(vkdt.wstate.active_widget_modid == modid && vkdt.wstate.active_widget_parid == parid)
       {
@@ -828,7 +828,7 @@ inline void draw_widget(int modid, int parid)
     }
     case dt_token("axquad"):
     {
-      float *v = (float*)(vkdt.graph_dev.module[modid].param + 
+      float *v = (float*)(vkdt.graph_dev.module[modid].param +
         vkdt.graph_dev.module[modid].so->param[parid]->offset);
       const float iwd = vkdt.graph_dev.module[modid].connector[0].roi.wd;
       const float iht = vkdt.graph_dev.module[modid].connector[0].roi.ht;
@@ -888,7 +888,7 @@ inline void draw_widget(int modid, int parid)
     }
     case dt_token("draw"):
     {
-      float *v = (float*)(vkdt.graph_dev.module[modid].param + 
+      float *v = (float*)(vkdt.graph_dev.module[modid].param +
         vkdt.graph_dev.module[modid].so->param[parid]->offset);
       if(vkdt.wstate.active_widget_modid == modid && vkdt.wstate.active_widget_parid == parid)
       {
@@ -1124,7 +1124,7 @@ void render_darkroom()
         case dt_token("axquad"):
         {
           float v[8] = {
-            vkdt.wstate.state[0], vkdt.wstate.state[2], vkdt.wstate.state[1], vkdt.wstate.state[2], 
+            vkdt.wstate.state[0], vkdt.wstate.state[2], vkdt.wstate.state[1], vkdt.wstate.state[2],
             vkdt.wstate.state[1], vkdt.wstate.state[3], vkdt.wstate.state[0], vkdt.wstate.state[3]
           };
           float p[8];
