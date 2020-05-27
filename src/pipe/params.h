@@ -29,6 +29,7 @@ dt_ui_param_type_size(const dt_token_t type)
   if(type == dt_token("float"))  return sizeof(float);
   if(type == dt_token("int"))    return sizeof(int32_t);
   if(type == dt_token("string")) return sizeof(char);
+  if(type == dt_token("bool")) return sizeof(int32_t);
   return 0;
 }
 

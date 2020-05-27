@@ -796,6 +796,25 @@ inline void draw_widget(int modid, int parid)
       }
       break;
     }
+    case dt_token("ckbox"):
+    {
+      if(vkdt.graph_dev.module[modid].so->param[parid]->type == dt_token("bool"))
+      {
+        int32_t *val = (int32_t*)(vkdt.graph_dev.module[modid].param +
+          vkdt.graph_dev.module[modid].so->param[parid]->offset);
+        char str[10] = {0};
+        memcpy(str,
+            &vkdt.graph_dev.module[modid].so->param[parid]->name, 8);
+        if(ImGui::Checkbox(str, (bool *)val))
+        {
+          // TODO: let module decide which flags are needed!
+          vkdt.graph_dev.runflags = static_cast<dt_graph_run_t>(
+                 s_graph_run_record_cmd_buf | s_graph_run_wait_done);
+          vkdt.graph_dev.active_module = modid;
+        }
+      }
+      break;
+    }
     case dt_token("quad"):
     {
       float *v = (float*)(vkdt.graph_dev.module[modid].param + 

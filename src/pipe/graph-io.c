@@ -37,7 +37,7 @@ read_param_ascii(
     for(int i=0;i<cnt;i++)
       *(block++) = dt_read_float(line, &line);
   }
-  else if(p->type == dt_token("int"))
+  else if(p->type == dt_token("int") || p->type == dt_token("bool"))
   {
     int32_t *block = (int32_t *)(graph->module[modid].param + p->offset);
     for(int i=0;i<cnt;i++)
@@ -249,7 +249,8 @@ dt_graph_write_param_ascii(
       WRITE("%g:", v[i]);
     WRITE("%g\n", v[mod->so->param[p]->cnt-1]);
   }
-  else if(mod->so->param[p]->type == dt_token("int"))
+  else if(mod->so->param[p]->type == dt_token("int") ||
+          mod->so->param[p]->type == dt_token("bool"))
   {
     const int32_t *v = dt_module_param_int(mod, p);
     for(int i=0;i<mod->so->param[p]->cnt-1;i++)

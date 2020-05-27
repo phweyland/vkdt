@@ -53,7 +53,7 @@ read_param_config_ascii(
     for(int i=0;i<p->cnt;i++)
       *(val++) = dt_read_float(line, &line); // default value
   }
-  else if(type == dt_token("int"))
+  else if(type == dt_token("int") || type == dt_token("bool"))
   {
     int32_t *val = p->vali;
     for(int i=0;i<p->cnt;i++)
@@ -158,6 +158,7 @@ dt_module_so_load(
         min = dt_read_float(b, &b);
         max = dt_read_float(b, &b);
       }
+      else if(type == dt_token("ckbox"))  {}
       else if(type == dt_token("quad"))   {}
       else if(type == dt_token("axquad")) {}
       else if(type == dt_token("draw"))   {}
