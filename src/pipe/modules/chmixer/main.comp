@@ -1,0 +1,58 @@
+#version 460
+#extension GL_GOOGLE_include_directive    : enable
+#extension GL_EXT_nonuniform_qualifier    : enable
+
+#include "shared.glsl"
+
+layout(local_size_x = DT_LOCAL_SIZE_X, local_size_y = DT_LOCAL_SIZE_Y, local_size_z = 1) in;
+
+layout(std140, set = 0, binding = 1) uniform params_t
+{
+  float rd2rd, gr2rd, bl2rd;
+  float rd2gr, gr2gr, bl2gr;
+  float rd2bl, gr2bl, bl2bl;
+  int preslum, grey;
+} params;
+
+
+layout( // input f16 buffer rgb
+    set = 1, binding = 0
+) uniform sampler2D img_in;
+
+layout( // output f16 buffer rgb
+    set = 1, binding = 1
+) uniform writeonly image2D img_out;
+
+void
+main()
+{
+  ivec2 ipos = ivec2(gl_GlobalInvocationID);
+  if(any(greaterThanEqual(ipos, imageSize(img_out)))) return;
+
+  vec3 rgb = texelFetch(img_in, ipos, 0).rgb;
+  vec3 mixed;
+  vec3 rd = vec3(params.rd2rd, params.gr2rd, params.bl2rd);
+  vec3 gr = vec3(params.rd2gr, params.gr2gr, params.bl2gr);
+  vec3 bl = vec3(params.rd2bl, params.gr2bl, params.bl2bl);
+
+  if(params.preslum != 0)
+  {
+    float rds = params.rd2rd + params.gr2rd + params.bl2rd;
+    float grs = params.rd2gr + params.gr2gr + params.bl2gr;
+    float bls = params.rd2bl + params.gr2bl + params.bl2bl;
+    if(rds != 0.0) rd = rd / rds;
+    if(grs != 0.0) gr = gr / grs;
+    if(bls != 0.0) bl = bl / bls;
+  }
+
+  mixed.r = rgb.r * rd.r + rgb.g * rd.g + rgb.b * rd.b;
+  mixed.g = rgb.r * gr.r + rgb.g * gr.g + rgb.b * gr.b;
+  mixed.b = rgb.r * bl.r + rgb.g * bl.g + rgb.b * bl.b;
+
+  if(params.grey != 0)
+  {
+    mixed.r = mixed.g = mixed.b = luminance_rec2020(mixed);
+  }
+
+  imageStore(img_out, ipos, vec4(mixed, 1));
+}

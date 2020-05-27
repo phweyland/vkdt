@@ -1,0 +1,11 @@
+rd2rd:float:1:1.0
+gr2rd:float:1:0.0
+bl2rd:float:1:0.0
+rd2gr:float:1:0.0
+gr2gr:float:1:1.0
+bl2gr:float:1:0.0
+rd2bl:float:1:0.0
+gr2bl:float:1:0.0
+bl2bl:float:1:1.0
+preslum:bool:1:0
+grey:bool:1:1
